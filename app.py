@@ -1,5 +1,5 @@
 import streamlit as st
-import google.generativeai as genai
+from groq import Groq
 import json, sqlite3, os
 from datetime import datetime
 
@@ -12,8 +12,7 @@ ADMIN_SIFRE      = "esenler2025"
 ADMIN_KULLANICI  = "esenler_admin"
 DB_PATH          = "manifesto.db"
 
-genai.configure(api_key=API_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash-8b")
+groq_client = Groq(api_key=API_KEY)
 
 # ============================================================
 # VERİTABANI — SQLite
@@ -338,8 +337,11 @@ SADECE şu JSON formatında yanıt ver, başka hiçbir şey yazma:
 "yasal_dayanak":"5393 sayılı Belediye Kanunu Madde 14/a",
 "tahmini_maliyet":"Düşük/Orta/Yüksek — kısa açıklama",
 "ilgili_birim":"İlgili Müdürlük","oncelik_skoru":7}}"""
-    r = model.generate_content(prompt)
-    raw = r.text.replace("```json","").replace("```","").strip()
+    r = groq_client.chat.completions.create(
+        model="llama3-8b-8192",
+        messages=[{"role":"user","content":prompt}]
+    )
+    raw = r.choices[0].message.content.replace("```json","").replace("```","").strip()
     sonuc = json.loads(raw)
     st.session_state.onbellekte[metin[:80].lower()] = sonuc
     return sonuc, len(metin.split())*2+300
