@@ -338,7 +338,7 @@ SADECE şu JSON formatında yanıt ver, başka hiçbir şey yazma:
 "tahmini_maliyet":"Düşük/Orta/Yüksek — kısa açıklama",
 "ilgili_birim":"İlgili Müdürlük","oncelik_skoru":7}}"""
     r = groq_client.chat.completions.create(
-        model="llama3-8b-8192",
+        model="llama-3.1-8b-instant",
         messages=[{"role":"user","content":prompt}]
     )
     raw = r.choices[0].message.content.replace("```json","").replace("```","").strip()
