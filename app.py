@@ -33,7 +33,14 @@ def db_init():
         rozet TEXT DEFAULT '[]',
         uyari_sayisi INTEGER DEFAULT 0,
         tarih TEXT DEFAULT (datetime('now','localtime'))
-    );
+    );""")
+    # Eski veritabanlarında uyari_sayisi kolonu yoksa ekle
+    try:
+        c.execute("ALTER TABLE kullanicilar ADD COLUMN uyari_sayisi INTEGER DEFAULT 0")
+        c.commit()
+    except:
+        pass  # Kolon zaten varsa hata verme
+    c.executescript("""
     CREATE TABLE IF NOT EXISTS onergeler (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         kullanici_id INTEGER,
@@ -710,40 +717,55 @@ elif st.session_state.sayfa == "topluluk":
         st.info("Önerge bulunamadı. 🌱")
     else:
         for o in listele:
-            meclis   = o["oy"] >= MECLIS_OY_ESIGI
-            kat_html = f'<span class="kat-etiket">{o["kategori"]} › {o["alt_kategori"]}</span>' if o.get("kategori") else ""
-            st.markdown(f"""<div class="onerge-kart">
-              <div style="display:flex;justify-content:space-between;align-items:flex-start">
-                <b>#{o['id']} — {o['baslik']}</b>
-                {'<span class="meclis-badge">🏛️ Meclise Gönderildi!</span>' if meclis else ""}
-              </div>
-              <div style="margin:5px 0">{kat_html}</div>
-              <div style="color:#94a3b8;font-size:0.82rem">👤 {o['yazar']} · 🕒 {o['tarih']}</div>
-              <div style="color:#cbd5e1;font-size:0.88rem;margin-top:4px">💬 <i>"{o['ham'][:80]}..."</i></div>
-              <div style="color:#94a3b8;font-size:0.82rem;margin-top:4px">{o['gerekce'][:120]}...</div>
-            </div>""", unsafe_allow_html=True)
+            meclis = o["oy"] >= MECLIS_OY_ESIGI
+            sahip  = (kid and o.get("kullanici_id") == kid)
 
-            oc,dc = st.columns([2,2])
-            with oc:
-                if st.button(f"👍 Destekle ({o['oy']} oy)", key=f"oy_{o['id']}"):
-                    if kid:
-                        if oy_ver(o["id"], kid):
-                            puan_guncelle(kid, 10, "Önerge oylama")
-                            rozet_kontrol_ve_guncelle(kid)
-                            st.rerun()
+            with st.container():
+                # Başlık satırı
+                hcol, bcol = st.columns([4,1])
+                with hcol:
+                    st.markdown(f"**#{o['id']} — {o['baslik']}**")
+                with bcol:
+                    if meclis:
+                        st.success("🏛️ Mecliste!")
+
+                # Kategori etiketi
+                if o.get("kategori"):
+                    st.caption(f"📂 {o['kategori']} › {o.get('alt_kategori','')}")
+
+                # Meta bilgi
+                st.caption(f"👤 {o['yazar']} · 🕒 {o['tarih']}")
+
+                # Ham fikir (kısa)
+                st.markdown(f"💬 *\"{o['ham'][:80]}...\"*")
+
+                # Resmi gerekçe
+                st.markdown(f"<span style='color:#94a3b8;font-size:0.85rem'>{o['gerekce'][:120]}...</span>",
+                            unsafe_allow_html=True)
+
+                # Oy ve durum
+                oc, dc = st.columns([2,2])
+                with oc:
+                    if st.button(f"👍 Destekle ({o['oy']} oy)", key=f"oy_{o['id']}"):
+                        if kid:
+                            if oy_ver(o["id"], kid):
+                                puan_guncelle(kid, 10, "Önerge oylama")
+                                rozet_kontrol_ve_guncelle(kid)
+                                st.rerun()
+                            else:
+                                st.warning("Bu önergeyi zaten oyladın!")
                         else:
-                            st.warning("Bu önergeyi zaten oyladın!")
-                    else:
-                        st.warning("Oy vermek için giriş yapmalısın!")
-            with dc:
-                if not meclis:
-                    st.caption(f"🏛️ Meclise {MECLIS_OY_ESIGI-o['oy']} oy kaldı")
-                else:
-                    st.success("🏛️ Gündemde!")
-            if o.get("admin_yanit"):
-                st.info(f"🏛️ Belediye Yanıtı: {o['admin_yanit']}")
-            st.caption(f"🌿 {o['karbon']:.4f} gCO₂e · {'♻️ önbellek' if o['onbellekten'] else 'GES ✅'}")
-            st.divider()
+                            st.warning("Oy vermek için giriş yapmalısın!")
+                with dc:
+                    if not meclis:
+                        st.caption(f"🏛️ Meclise {MECLIS_OY_ESIGI - o['oy']} oy kaldı")
+
+                # Admin yanıtı — SADECE önerge sahibine bildirim olarak göster
+                if sahip and o.get("admin_yanit"):
+                    st.info(f"🔔 **Belediye Bildirimi:** {o['admin_yanit']}")
+
+                st.caption(f"🌿 {o['karbon']:.4f} gCO₂e · {'♻️ önbellek' if o['onbellekten'] else 'GES ✅'}")
+                st.divider()
 
 # ============================================================
 # YÖNETİCİ PANELİ
