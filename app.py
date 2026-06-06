@@ -6,7 +6,7 @@ from datetime import datetime
 # ============================================================
 # AYARLAR
 # ============================================================
-API_KEY    = st.secrets["AQ.Ab8RN6KQ_DIRCGDgC0GN_1N3jfFfKLY30UTw-PxQisSW-F7oHg"]
+API_KEY = st.secrets["GEMINI_API_KEY"]
 MECLIS_OY_ESIGI  = 25          # demo için 25, gerçekte 2500
 ADMIN_SIFRE      = "esenler2025"
 ADMIN_KULLANICI  = "esenler_admin"
