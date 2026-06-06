@@ -1,13 +1,13 @@
 import streamlit as st
 from groq import Groq
-import json, sqlite3, os
+import json, sqlite3
 from datetime import datetime
 
 # ============================================================
 # AYARLAR
 # ============================================================
-API_KEY = st.secrets["GROQ_API_KEY"]
-MECLIS_OY_ESIGI  = 25          # demo için 25, gerçekte 2500
+API_KEY          = st.secrets["GROQ_API_KEY"]
+MECLIS_OY_ESIGI  = 25
 ADMIN_SIFRE      = "esenler2025"
 ADMIN_KULLANICI  = "esenler_admin"
 DB_PATH          = "manifesto.db"
@@ -15,7 +15,7 @@ DB_PATH          = "manifesto.db"
 groq_client = Groq(api_key=API_KEY)
 
 # ============================================================
-# VERİTABANI — SQLite
+# VERİTABANI
 # ============================================================
 def db():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -26,68 +26,68 @@ def db_init():
     c = db()
     c.executescript("""
     CREATE TABLE IF NOT EXISTS kullanicilar (
-        id        INTEGER PRIMARY KEY AUTOINCREMENT,
-        ad        TEXT NOT NULL,
-        sehir     TEXT DEFAULT 'Esenler',
-        puan      INTEGER DEFAULT 0,
-        rozet     TEXT DEFAULT '[]',
-        tarih     TEXT DEFAULT (datetime('now','localtime'))
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ad TEXT NOT NULL,
+        sehir TEXT DEFAULT 'Esenler',
+        puan INTEGER DEFAULT 0,
+        rozet TEXT DEFAULT '[]',
+        uyari_sayisi INTEGER DEFAULT 0,
+        tarih TEXT DEFAULT (datetime('now','localtime'))
     );
     CREATE TABLE IF NOT EXISTS onergeler (
-        id            INTEGER PRIMARY KEY AUTOINCREMENT,
-        kullanici_id  INTEGER,
-        yazar         TEXT,
-        ham           TEXT NOT NULL,
-        baslik        TEXT,
-        gerekce       TEXT,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kullanici_id INTEGER,
+        yazar TEXT,
+        ham TEXT NOT NULL,
+        baslik TEXT,
+        gerekce TEXT,
         yasal_dayanak TEXT,
         tahmini_maliyet TEXT,
-        ilgili_birim  TEXT,
+        ilgili_birim TEXT,
         oncelik_skoru INTEGER DEFAULT 7,
-        oy            INTEGER DEFAULT 0,
-        kategori      TEXT,
-        alt_kategori  TEXT,
-        durum         TEXT DEFAULT 'beklemede',
-        admin_yanit   TEXT DEFAULT '',
-        karbon        REAL DEFAULT 0.0,
-        onbellekten   INTEGER DEFAULT 0,
-        tarih         TEXT DEFAULT (datetime('now','localtime')),
+        oy INTEGER DEFAULT 0,
+        kategori TEXT,
+        alt_kategori TEXT,
+        durum TEXT DEFAULT 'beklemede',
+        admin_yanit TEXT DEFAULT '',
+        karbon REAL DEFAULT 0.0,
+        onbellekten INTEGER DEFAULT 0,
+        tarih TEXT DEFAULT (datetime('now','localtime')),
         FOREIGN KEY(kullanici_id) REFERENCES kullanicilar(id)
     );
     CREATE TABLE IF NOT EXISTS oylar (
-        id           INTEGER PRIMARY KEY AUTOINCREMENT,
-        onerge_id    INTEGER,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        onerge_id INTEGER,
         kullanici_id INTEGER,
-        tarih        TEXT DEFAULT (datetime('now','localtime')),
+        tarih TEXT DEFAULT (datetime('now','localtime')),
         UNIQUE(onerge_id, kullanici_id)
     );
     CREATE TABLE IF NOT EXISTS odul_talepleri (
-        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
         kullanici_id INTEGER,
         kullanici_ad TEXT,
-        odul_ad      TEXT,
-        durum        TEXT DEFAULT 'beklemede',
-        tarih        TEXT DEFAULT (datetime('now','localtime'))
+        odul_ad TEXT,
+        durum TEXT DEFAULT 'beklemede',
+        tarih TEXT DEFAULT (datetime('now','localtime'))
     );
     CREATE TABLE IF NOT EXISTS puan_hareketleri (
-        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
         kullanici_id INTEGER,
-        miktar       INTEGER,
-        sebep        TEXT,
-        tarih        TEXT DEFAULT (datetime('now','localtime'))
+        miktar INTEGER,
+        sebep TEXT,
+        tarih TEXT DEFAULT (datetime('now','localtime'))
     );
     """)
-    c.commit()
-    c.close()
+    c.commit(); c.close()
 
 db_init()
 
 # ============================================================
-# DB YARDIMCI FONKSİYONLAR
+# DB FONKSİYONLAR
 # ============================================================
 def kullanici_kaydet(ad, sehir):
     c = db()
-    cur = c.execute("INSERT INTO kullanicilar (ad, sehir) VALUES (?,?)", (ad, sehir))
+    cur = c.execute("INSERT INTO kullanicilar (ad,sehir) VALUES (?,?)", (ad, sehir))
     kid = cur.lastrowid
     c.commit(); c.close()
     return kid
@@ -102,6 +102,12 @@ def puan_guncelle(kid, miktar, sebep):
     c = db()
     c.execute("UPDATE kullanicilar SET puan=puan+? WHERE id=?", (miktar, kid))
     c.execute("INSERT INTO puan_hareketleri (kullanici_id,miktar,sebep) VALUES (?,?,?)", (kid, miktar, sebep))
+    c.commit(); c.close()
+
+def uyari_ekle(kid):
+    c = db()
+    c.execute("UPDATE kullanicilar SET uyari_sayisi=uyari_sayisi+1, puan=MAX(0,puan-20) WHERE id=?", (kid,))
+    c.execute("INSERT INTO puan_hareketleri (kullanici_id,miktar,sebep) VALUES (?,?,?)", (kid, -20, "Uygunsuz içerik cezası"))
     c.commit(); c.close()
 
 def rozet_guncelle(kid, rozetler):
@@ -131,7 +137,7 @@ def onergeler_getir(siralama="oy", kat_filtre=None, arama=None):
         q += " AND kategori=?"; params.append(kat_filtre)
     if arama:
         q += " AND (ham LIKE ? OR baslik LIKE ?)"; params += [f"%{arama}%", f"%{arama}%"]
-    order = {"oy": "oy DESC", "yeni": "id DESC", "meclis": "oy DESC"}.get(siralama, "oy DESC")
+    order = {"oy":"oy DESC","yeni":"id DESC","meclis":"oy DESC"}.get(siralama,"oy DESC")
     q += f" ORDER BY {order}"
     rows = c.execute(q, params).fetchall()
     c.close()
@@ -145,10 +151,9 @@ def oy_ver(onerge_id, kullanici_id):
     try:
         c.execute("INSERT INTO oylar (onerge_id,kullanici_id) VALUES (?,?)", (onerge_id, kullanici_id))
         c.execute("UPDATE onergeler SET oy=oy+1 WHERE id=?", (onerge_id,))
-        c.commit(); c.close()
-        return True
+        c.commit(); c.close(); return True
     except sqlite3.IntegrityError:
-        c.close(); return False   # zaten oy verilmiş
+        c.close(); return False
 
 def onerge_guncelle(oid, durum=None, yanit=None):
     c = db()
@@ -174,20 +179,20 @@ def odul_talep_onayla(talep_id):
 
 def istatistik_getir():
     c = db()
-    toplam   = c.execute("SELECT COUNT(*) FROM onergeler").fetchone()[0]
-    bekleyen = c.execute("SELECT COUNT(*) FROM onergeler WHERE durum='beklemede'").fetchone()[0]
-    meclis   = c.execute(f"SELECT COUNT(*) FROM onergeler WHERE oy>={MECLIS_OY_ESIGI}").fetchone()[0]
-    toplam_oy= c.execute("SELECT SUM(oy) FROM onergeler").fetchone()[0] or 0
-    karbon   = c.execute("SELECT SUM(karbon) FROM onergeler").fetchone()[0] or 0.0
+    toplam    = c.execute("SELECT COUNT(*) FROM onergeler").fetchone()[0]
+    bekleyen  = c.execute("SELECT COUNT(*) FROM onergeler WHERE durum='beklemede'").fetchone()[0]
+    meclis    = c.execute(f"SELECT COUNT(*) FROM onergeler WHERE oy>={MECLIS_OY_ESIGI}").fetchone()[0]
+    toplam_oy = c.execute("SELECT SUM(oy) FROM onergeler").fetchone()[0] or 0
+    karbon    = c.execute("SELECT SUM(karbon) FROM onergeler").fetchone()[0] or 0.0
     onbellekten = c.execute("SELECT COUNT(*) FROM onergeler WHERE onbellekten=1").fetchone()[0]
-    kat_dag  = c.execute("SELECT kategori,COUNT(*) as sayi FROM onergeler GROUP BY kategori ORDER BY sayi DESC").fetchall()
+    kat_dag   = c.execute("SELECT kategori,COUNT(*) as sayi FROM onergeler GROUP BY kategori ORDER BY sayi DESC").fetchall()
     c.close()
     return {"toplam":toplam,"bekleyen":bekleyen,"meclis":meclis,
             "toplam_oy":toplam_oy,"karbon":karbon,"onbellekten":onbellekten,
             "kat_dag":[dict(r) for r in kat_dag]}
 
 # ============================================================
-# SABITLER
+# SABİTLER
 # ============================================================
 ODULLER = [
     {"puan":100,  "emoji":"🏊","ad":"Yüzme Havuzu Girişi",             "tur":"Tesis",    "aciklama":"Esenler Millet Bahçesi havuzuna 1 seferlik ücretsiz giriş"},
@@ -217,26 +222,26 @@ ETKINLIK_PUANLARI = [
 ]
 
 KATEGORILER = {
-    "⚽ Spor":              {"aciklama":"Spor tesisleri, kulüpler, etkinlikler",
-                             "altlar":["Halı Saha & Basketbol","Yüzme & Havuz","Fitness & Spor Salonu","Amatör Spor Kulüpleri","Spor Turnuvaları","Bisiklet & Koşu"]},
-    "🎭 Kültür & Sanat":   {"aciklama":"Konser, sergi, tiyatro, festival",
-                             "altlar":["Konser & Müzik","Tiyatro & Gösteri","Sergi & Müze","Festival & Şenlik","Sanat Atölyeleri","Sinema"]},
-    "🌳 Park & Çevre":     {"aciklama":"Parklar, yeşil alanlar, çevre düzenlemesi",
-                             "altlar":["15 Temmuz Millet Bahçesi","Mahalle Parkları","Yeşil Alan & Ağaçlandırma","Çevre Temizliği","Geri Dönüşüm","İklim & Sürdürülebilirlik"]},
-    "🎓 Eğitim & Gençlik": {"aciklama":"Kurslar, gençlik merkezi, kariyer",
-                             "altlar":["Yazılımcı Fabrikası","Mesleki Kurslar","Gençlik Merkezi","Kariyer & Staj","Burs & Destek","Yabancı Dil"]},
-    "🚌 Ulaşım & Altyapı": {"aciklama":"Yollar, toplu taşıma, aydınlatma",
-                             "altlar":["Yol & Kaldırım","Toplu Taşıma","Park & Otopark","Aydınlatma","Bisiklet Yolu","Engelli Erişimi"]},
-    "🏥 Sağlık & Sosyal":  {"aciklama":"Sağlık, sosyal yardım, engelli hizmetleri",
-                             "altlar":["Sağlık Taraması","Psikolojik Destek","Engelli Hizmetleri","Yaşlı Hizmetleri","Sosyal Yardım","Kadın & Aile"]},
-    "🏗️ Kentsel Dönüşüm": {"aciklama":"Bina yenileme, kentsel tasarım",
-                             "altlar":["Bina Yenileme","Mahalle Tasarımı","Boş Alan Değerlendirme","Tarihi Alan Koruma","Meydan Düzenlemesi","Duvar & Cephe"]},
-    "🆘 Acil & Güvenlik":  {"aciklama":"Deprem, afet, güvenlik, itfaiye",
-                             "altlar":["Deprem Hazırlık","Afet Toplanma Alanı","Güvenlik Kamerası","Yangın Güvenliği","İlk Yardım Eğitimi","Acil Durum Planı"]},
+    "⚽ Spor":               {"aciklama":"Spor tesisleri, kulüpler, etkinlikler",
+                              "altlar":["Halı Saha & Basketbol","Yüzme & Havuz","Fitness & Spor Salonu","Amatör Spor Kulüpleri","Spor Turnuvaları","Bisiklet & Koşu"]},
+    "🎭 Kültür & Sanat":    {"aciklama":"Konser, sergi, tiyatro, festival",
+                              "altlar":["Konser & Müzik","Tiyatro & Gösteri","Sergi & Müze","Festival & Şenlik","Sanat Atölyeleri","Sinema"]},
+    "🌳 Park & Çevre":      {"aciklama":"Parklar, yeşil alanlar, çevre düzenlemesi",
+                              "altlar":["15 Temmuz Millet Bahçesi","Mahalle Parkları","Yeşil Alan & Ağaçlandırma","Çevre Temizliği","Geri Dönüşüm","İklim & Sürdürülebilirlik"]},
+    "🎓 Eğitim & Gençlik":  {"aciklama":"Kurslar, gençlik merkezi, kariyer",
+                              "altlar":["Yazılımcı Fabrikası","Mesleki Kurslar","Gençlik Merkezi","Kariyer & Staj","Burs & Destek","Yabancı Dil"]},
+    "🚌 Ulaşım & Altyapı":  {"aciklama":"Yollar, toplu taşıma, aydınlatma",
+                              "altlar":["Yol & Kaldırım","Toplu Taşıma","Park & Otopark","Aydınlatma","Bisiklet Yolu","Engelli Erişimi"]},
+    "🏥 Sağlık & Sosyal":   {"aciklama":"Sağlık, sosyal yardım, engelli hizmetleri",
+                              "altlar":["Sağlık Taraması","Psikolojik Destek","Engelli Hizmetleri","Yaşlı Hizmetleri","Sosyal Yardım","Kadın & Aile"]},
+    "🏗️ Kentsel Dönüşüm":  {"aciklama":"Bina yenileme, kentsel tasarım",
+                              "altlar":["Bina Yenileme","Mahalle Tasarımı","Boş Alan Değerlendirme","Tarihi Alan Koruma","Meydan Düzenlemesi","Duvar & Cephe"]},
+    "🆘 Acil & Güvenlik":   {"aciklama":"Deprem, afet, güvenlik, itfaiye",
+                              "altlar":["Deprem Hazırlık","Afet Toplanma Alanı","Güvenlik Kamerası","Yangın Güvenliği","İlk Yardım Eğitimi","Acil Durum Planı"]},
     "💻 Dijital & Teknoloji":{"aciklama":"Akıllı şehir, wifi, dijital hizmetler",
-                             "altlar":["Ücretsiz Wi-Fi","Akıllı Şehir","E-Belediye Hizmetleri","Dijital Kütüphane","Kodlama & Robotik","Yapay Zeka Projeleri"]},
-    "🎉 Etkinlik & Gezi":  {"aciklama":"Şehir gezileri, kamplar, gençlik etkinlikleri",
-                             "altlar":["Yurt İçi Gezi","Yurt Dışı Gezi","Yaz Kampı","Kış Kampı","Gençlik Günleri","Mahalle Şenlikleri"]},
+                              "altlar":["Ücretsiz Wi-Fi","Akıllı Şehir","E-Belediye Hizmetleri","Dijital Kütüphane","Kodlama & Robotik","Yapay Zeka Projeleri"]},
+    "🎉 Etkinlik & Gezi":   {"aciklama":"Şehir gezileri, kamplar, gençlik etkinlikleri",
+                              "altlar":["Yurt İçi Gezi","Yurt Dışı Gezi","Yaz Kampı","Kış Kampı","Gençlik Günleri","Mahalle Şenlikleri"]},
 }
 
 YASAK_KELIMELER = [
@@ -270,6 +275,11 @@ html,body,[class*="css"]{font-family:'Nunito',sans-serif;}
 .odul-tur{font-size:0.72rem;color:#718096;}
 .odul-puan{font-size:0.75rem;color:#63b3ed;font-weight:800;}
 .onerge-kart{background:#1e293b;border:1px solid rgba(255,255,255,0.07);border-radius:16px;padding:18px;margin-bottom:14px;}
+.admin-onerge{background:#1e293b;border:1px solid rgba(245,158,11,0.2);border-radius:14px;padding:18px;margin-bottom:14px;}
+.resmi-metin{background:#0f172a;border-radius:10px;padding:14px;margin-top:10px;border:1px solid rgba(99,179,237,0.15);}
+.resmi-satir{margin-bottom:8px;font-size:0.88rem;line-height:1.6;}
+.resmi-label{color:#63b3ed;font-weight:700;margin-right:6px;}
+.resmi-deger{color:#e2e8f0;}
 .karbon-badge{background:rgba(52,211,153,0.12);border:1px solid rgba(52,211,153,0.3);
   border-radius:8px;padding:5px 12px;font-size:0.78rem;color:#6ee7b7;display:inline-block;margin-top:6px;}
 .meclis-badge{background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.4);
@@ -288,10 +298,7 @@ html,body,[class*="css"]{font-family:'Nunito',sans-serif;}
   border-radius:20px;padding:28px;border:1px solid rgba(99,179,237,0.15);}
 .giris-kart{background:linear-gradient(135deg,#1e293b,#0f172a);
   border-radius:20px;padding:40px;border:1px solid rgba(99,179,237,0.2);}
-.admin-kart{background:#1e293b;border-radius:14px;padding:16px;
-  margin-bottom:10px;border:1px solid rgba(245,158,11,0.2);}
-.kat-etiket{background:rgba(99,179,237,0.15);border-radius:6px;
-  padding:1px 8px;color:#63b3ed;font-size:0.78rem;}
+.kat-etiket{background:rgba(99,179,237,0.15);border-radius:6px;padding:1px 8px;color:#63b3ed;font-size:0.78rem;}
 </style>
 """
 
@@ -299,12 +306,12 @@ html,body,[class*="css"]{font-family:'Nunito',sans-serif;}
 # SESSION STATE
 # ============================================================
 DEFAULTS = {
-    "kullanici_id": None, "kullanici_ad": "", "kullanici_sehir": "Esenler",
-    "admin_giris": False, "sayfa": "giris",
-    "onbellekte": {}, "kurtarilan_api": 0,
-    "secili_kat": list(KATEGORILER.keys())[0],
+    "kullanici_id":None,"kullanici_ad":"","kullanici_sehir":"Esenler",
+    "admin_giris":False,"sayfa":"giris",
+    "onbellekte":{},"kurtarilan_api":0,
+    "secili_kat":list(KATEGORILER.keys())[0],
 }
-for k, v in DEFAULTS.items():
+for k,v in DEFAULTS.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
@@ -315,7 +322,7 @@ def icerik_filtrele(metin):
     ml = metin.lower()
     for k in YASAK_KELIMELER:
         if k in ml:
-            return False, "Uygunsuz ifade tespit edildi. Lütfen saygılı bir dil kullan."
+            return False, f"Uygunsuz ifade tespit edildi. Lütfen saygılı bir dil kullan."
     if len(metin.strip()) < 15:
         return False, "Fikrin çok kısa, lütfen daha fazla detay ver (en az 15 karakter)."
     if len(metin) > 1000:
@@ -323,7 +330,7 @@ def icerik_filtrele(metin):
     return True, ""
 
 def karbon_hesapla(n):
-    return round((n * 9 * 1.15) / 3600 * 0.4 * 1000, 4)
+    return round((n*9*1.15)/3600*0.4*1000, 4)
 
 def onerge_ai(metin):
     cached = st.session_state.onbellekte.get(metin[:80].lower())
@@ -331,12 +338,14 @@ def onerge_ai(metin):
         st.session_state.kurtarilan_api += 1
         return cached, 0
     prompt = f"""Sen Esenler Belediyesi resmi karar yazım asistanısın.
-Kullanıcı fikri: "{metin}"
-SADECE şu JSON formatında yanıt ver, başka hiçbir şey yazma:
-{{"baslik":"resmi kısa başlık","gerekce":"2-3 cümle gerekçe",
-"yasal_dayanak":"5393 sayılı Belediye Kanunu Madde 14/a",
-"tahmini_maliyet":"Düşük/Orta/Yüksek — kısa açıklama",
-"ilgili_birim":"İlgili Müdürlük","oncelik_skoru":7}}"""
+Kullanıcının fikri: "{metin}"
+
+Lütfen bu fikri:
+1. Yazım ve dilbilgisi kurallarına uygun şekilde düzenle
+2. Resmi belediye kararı formatına çevir
+
+SADECE aşağıdaki JSON formatında yanıt ver, başka hiçbir şey yazma:
+{{"baslik":"Resmi ve kısa başlık","gerekce":"2-3 cümle resmi gerekçe. Yazım kurallarına uygun.","yasal_dayanak":"5393 sayılı Belediye Kanunu Madde 14/a","tahmini_maliyet":"Düşük/Orta/Yüksek — kısa açıklama","ilgili_birim":"İlgili Müdürlük adı","oncelik_skoru":7}}"""
     r = groq_client.chat.completions.create(
         model="llama-3.1-8b-instant",
         messages=[{"role":"user","content":prompt}]
@@ -348,17 +357,17 @@ SADECE şu JSON formatında yanıt ver, başka hiçbir şey yazma:
 
 def rozet_kontrol_ve_guncelle(kid):
     k = kullanici_getir(kid)
-    if not k: return
+    if not k: return []
     rozetler = json.loads(k["rozet"])
-    p, n = k["puan"], 0
+    p = k["puan"]
     c = db()
     n = c.execute("SELECT COUNT(*) FROM onergeler WHERE kullanici_id=?", (kid,)).fetchone()[0]
     c.close()
     yeni = []
-    if n >= 1  and "🌱 Tohumcu"         not in rozetler: yeni.append("🌱 Tohumcu")
-    if p >= 300 and "🔊 Ses Getiren"    not in rozetler: yeni.append("🔊 Ses Getiren")
-    if p >= 600 and "⚡ Aktif Vatandaş"  not in rozetler: yeni.append("⚡ Aktif Vatandaş")
-    if n >= 3  and "🏛️ Meclis Yıldızı"   not in rozetler: yeni.append("🏛️ Meclis Yıldızı")
+    if n>=1  and "🌱 Tohumcu"         not in rozetler: yeni.append("🌱 Tohumcu")
+    if p>=300 and "🔊 Ses Getiren"    not in rozetler: yeni.append("🔊 Ses Getiren")
+    if p>=600 and "⚡ Aktif Vatandaş"  not in rozetler: yeni.append("⚡ Aktif Vatandaş")
+    if n>=3  and "🏛️ Meclis Yıldızı"   not in rozetler: yeni.append("🏛️ Meclis Yıldızı")
     if yeni:
         rozetler.extend(yeni)
         rozet_guncelle(kid, rozetler)
@@ -373,14 +382,31 @@ def sonraki_odul(p):
 def ilerleme_goster(puan):
     son = sonraki_odul(puan)
     if not son: return
-    onceki = max([0]+[o["puan"] for o in ODULLER if o["puan"] <= puan])
-    aralik = son["puan"] - onceki
+    onceki = max([0]+[o["puan"] for o in ODULLER if o["puan"]<=puan])
+    aralik = son["puan"]-onceki
     oran = min(int((puan-onceki)/aralik*100),100) if aralik else 100
     st.markdown(f"""<div style="color:#94a3b8;font-size:0.85rem;margin-top:12px">
       Sonraki ödül: <b style="color:#63b3ed">{son['emoji']} {son['ad']}</b>
       — <b>{son['puan']-puan} puan</b> kaldı</div>
       <div class="ilerleme-bar"><div class="ilerleme-ic" style="width:{oran}%"></div></div>
     """, unsafe_allow_html=True)
+
+def resmi_metin_goster(o):
+    """Admin panelinde önergenin resmi metnini düzgün göster"""
+    st.markdown(f"""<div class="resmi-metin">
+      <div class="resmi-satir"><span class="resmi-label">📌 Başlık:</span>
+        <span class="resmi-deger">{o.get('baslik','—')}</span></div>
+      <div class="resmi-satir"><span class="resmi-label">📝 Gerekçe:</span>
+        <span class="resmi-deger">{o.get('gerekce','—')}</span></div>
+      <div class="resmi-satir"><span class="resmi-label">⚖️ Yasal Dayanak:</span>
+        <span class="resmi-deger">{o.get('yasal_dayanak','—')}</span></div>
+      <div class="resmi-satir"><span class="resmi-label">💰 Tahmini Maliyet:</span>
+        <span class="resmi-deger">{o.get('tahmini_maliyet','—')}</span></div>
+      <div class="resmi-satir"><span class="resmi-label">🏢 İlgili Birim:</span>
+        <span class="resmi-deger">{o.get('ilgili_birim','—')}</span></div>
+      <div class="resmi-satir"><span class="resmi-label">🎯 Öncelik:</span>
+        <span class="resmi-deger">{'⭐'*int(o.get('oncelik_skoru',7))}</span></div>
+    </div>""", unsafe_allow_html=True)
 
 # ============================================================
 # SAYFA KURULUM
@@ -409,9 +435,9 @@ if st.session_state.sayfa == "giris":
         if st.button("🚀 Uygulamaya Gir", type="primary", use_container_width=True):
             if ad.strip():
                 kid = kullanici_kaydet(ad.strip(), sehir)
-                st.session_state.kullanici_id  = kid
-                st.session_state.kullanici_ad  = ad.strip()
-                st.session_state.kullanici_sehir = sehir
+                st.session_state.kullanici_id   = kid
+                st.session_state.kullanici_ad   = ad.strip()
+                st.session_state.kullanici_sehir= sehir
                 st.session_state.sayfa = "ana"
                 st.rerun()
             else:
@@ -427,8 +453,8 @@ if st.session_state.sayfa == "giris":
         pw       = st.text_input("Şifre", type="password")
         if st.button("🔐 Yönetici Paneline Gir", use_container_width=True):
             if admin_ad == ADMIN_KULLANICI and pw == ADMIN_SIFRE:
-                st.session_state.admin_giris   = True
-                st.session_state.kullanici_ad  = "Yönetici"
+                st.session_state.admin_giris  = True
+                st.session_state.kullanici_ad = "Yönetici"
                 st.session_state.sayfa = "admin"
                 st.rerun()
             else:
@@ -437,12 +463,12 @@ if st.session_state.sayfa == "giris":
     st.stop()
 
 # ============================================================
-# HERO + NAV (giriş sonrası)
+# HERO + NAV
 # ============================================================
-kid = st.session_state.kullanici_id
+kid     = st.session_state.kullanici_id
 k_bilgi = kullanici_getir(kid) if kid else None
-puan   = k_bilgi["puan"]   if k_bilgi else 0
-rozetler = json.loads(k_bilgi["rozet"]) if k_bilgi else []
+puan    = k_bilgi["puan"]              if k_bilgi else 0
+rozetler= json.loads(k_bilgi["rozet"]) if k_bilgi else []
 
 st.markdown(f"""<div class="hero">
   <div class="hero-title">🏙️ Esenler Manifesto-Z</div>
@@ -471,9 +497,9 @@ if st.session_state.sayfa == "ana":
     stats = istatistik_getir()
     c1,c2,c3,c4 = st.columns(4)
     for col,sayi,etiket in [
-        (c1, puan,              "⭐ Toplam Puanın"),
-        (c2, stats["toplam"],   "📋 Toplam Önerge"),
-        (c3, stats["meclis"],   "🏛️ Meclise Giden"),
+        (c1, puan,               "⭐ Toplam Puanın"),
+        (c2, stats["toplam"],    "📋 Toplam Önerge"),
+        (c3, stats["meclis"],    "🏛️ Meclise Giden"),
         (c4, stats["toplam_oy"],"👍 Toplam Oy"),
     ]:
         col.markdown(f"""<div class="stat-kart">
@@ -493,7 +519,7 @@ if st.session_state.sayfa == "ana":
     if gundem:
         st.subheader("🔥 Gündem Önergeleri")
         for o in gundem:
-            etiket = "🏛️ Meclise Gönderildi!" if o["oy"]>=MECLIS_OY_ESIGI else f"👍 {o['oy']} oy"
+            etiket   = "🏛️ Meclise Gönderildi!" if o["oy"]>=MECLIS_OY_ESIGI else f"👍 {o['oy']} oy"
             kat_html = f'<span class="kat-etiket">{o["kategori"]}</span>' if o.get("kategori") else ""
             st.markdown(f"""<div class="onerge-kart">
               <b>#{o['id']} {o['baslik']}</b>
@@ -507,23 +533,24 @@ if st.session_state.sayfa == "ana":
 # ============================================================
 elif st.session_state.sayfa == "onerge":
     st.markdown(f"""<div class="bilgi-kutu">
-    📢 Fikrini günlük dilde yaz, yapay zeka resmi belediye kararına dönüştürsün.
+    📢 Fikrini günlük dilde yaz — yapay zeka hem yazım kurallarına göre düzenler
+    hem de resmi belediye kararına dönüştürür.
     <b>{MECLIS_OY_ESIGI} oy</b> alan önergen Gençlik ve Spor Müdürlüğü'ne iletilir.
-    Hakaret ve uygunsuz içerikler otomatik engellenir.
+    Hakaret ve uygunsuz içerikler otomatik engellenir, <b>-20 puan</b> uygulanır.
     </div>""", unsafe_allow_html=True)
 
     sol, sag = st.columns([1,1], gap="large")
     with sol:
         st.subheader("✍️ Fikrini Yaz")
         st.markdown("**📂 Kategori Seç**")
-        kat_cols = st.columns(2)
+        kat_cols   = st.columns(2)
         secili_kat = st.session_state.secili_kat
         for i,(kat,_) in enumerate(KATEGORILER.items()):
             if kat_cols[i%2].button(kat, key=f"kat_{kat}", use_container_width=True,
                                     type="primary" if secili_kat==kat else "secondary"):
                 st.session_state.secili_kat = kat; st.rerun()
 
-        bilgi = KATEGORILER[secili_kat]
+        bilgi   = KATEGORILER[secili_kat]
         st.markdown(f'<div class="bilgi-kutu" style="margin:8px 0">{secili_kat} · {bilgi["aciklama"]}</div>',
                     unsafe_allow_html=True)
         alt_kat = st.selectbox("Alt Kategori", bilgi["altlar"])
@@ -537,9 +564,11 @@ elif st.session_state.sayfa == "onerge":
         if st.button("🚀 Önergeye Dönüştür", type="primary", use_container_width=True):
             gecerli, hata = icerik_filtrele(fikir)
             if not gecerli:
-                st.markdown(f'<div class="uyari-kutu">🚫 {hata}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="uyari-kutu">🚫 {hata}<br>⚠️ Tekrar denersen <b>-20 puan</b> uygulanır.</div>',
+                            unsafe_allow_html=True)
+                if kid: uyari_ekle(kid)
             else:
-                with st.spinner("Yapay zeka resmi metni hazırlıyor..."):
+                with st.spinner("Yapay zeka düzenliyor ve resmi metne çeviriyor..."):
                     try:
                         prompt_metin = f"Kategori: {secili_kat} > {alt_kat}\n{fikir}"
                         sonuc, tokens = onerge_ai(prompt_metin)
@@ -557,16 +586,11 @@ elif st.session_state.sayfa == "onerge":
 
     with sag:
         son_list = onergeler_getir("yeni")
-        kendi = [o for o in son_list if o.get("kullanici_id")==kid]
+        kendi    = [o for o in son_list if o.get("kullanici_id")==kid]
         if kendi:
             o = kendi[0]
-            st.subheader("📄 Son Önergen")
-            st.markdown(f"**📌** {o['baslik']}")
-            st.markdown(f"**📝** {o['gerekce']}")
-            st.markdown(f"**⚖️** {o['yasal_dayanak']}")
-            st.markdown(f"**💰** {o['tahmini_maliyet']}")
-            st.markdown(f"**🏢** {o['ilgili_birim']}")
-            st.markdown(f"**🎯** {'⭐'*o['oncelik_skoru']}")
+            st.subheader("📄 Yapay Zekanın Düzenlediği Resmi Önerge")
+            resmi_metin_goster(o)
             badge = ("♻️ Önbellekten — 0.000 gCO₂e ✅" if o["onbellekten"]
                      else f"🌿 {o['karbon']:.4f} gCO₂e · GES ile nötralize ✅")
             st.markdown(f'<div class="karbon-badge">{badge}</div>', unsafe_allow_html=True)
@@ -580,22 +604,27 @@ elif st.session_state.sayfa == "onerge":
 # PROFİL
 # ============================================================
 elif st.session_state.sayfa == "profil":
-    k_bilgi = kullanici_getir(kid)
-    puan    = k_bilgi["puan"] if k_bilgi else 0
-    rozetler= json.loads(k_bilgi["rozet"]) if k_bilgi else []
+    k_bilgi  = kullanici_getir(kid)
+    puan     = k_bilgi["puan"]              if k_bilgi else 0
+    rozetler = json.loads(k_bilgi["rozet"]) if k_bilgi else []
+    uyari    = k_bilgi.get("uyari_sayisi",0) if k_bilgi else 0
 
     sol, sag = st.columns([1,1], gap="large")
     with sol:
         st.subheader("👤 Profil Bilgileri")
-        yeni_ad    = st.text_input("Adın", value=st.session_state.kullanici_ad)
+        yeni_ad    = st.text_input("Adın",    value=st.session_state.kullanici_ad)
         yeni_sehir = st.text_input("Mahalle", value=st.session_state.kullanici_sehir)
         if st.button("💾 Kaydet", type="primary"):
             c = db()
-            c.execute("UPDATE kullanicilar SET ad=?,sehir=? WHERE id=?", (yeni_ad, yeni_sehir, kid))
+            c.execute("UPDATE kullanicilar SET ad=?,sehir=? WHERE id=?", (yeni_ad,yeni_sehir,kid))
             c.commit(); c.close()
             st.session_state.kullanici_ad    = yeni_ad
             st.session_state.kullanici_sehir = yeni_sehir
             st.success("Profil güncellendi!")
+
+        if uyari > 0:
+            st.markdown(f'<div class="uyari-kutu">⚠️ {uyari} uyarın var. Her uyarı -20 puan.</div>',
+                        unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
         st.subheader("🏅 Rozetlerim")
@@ -613,10 +642,10 @@ elif st.session_state.sayfa == "profil":
             </div>""", unsafe_allow_html=True)
 
     with sag:
-        c_onergeler = db()
-        k_onerge_sayisi = c_onergeler.execute(
-            "SELECT COUNT(*) FROM onergeler WHERE kullanici_id=?", (kid,)).fetchone()[0]
-        c_onergeler.close()
+        c2 = db()
+        k_onerge_sayisi = c2.execute(
+            "SELECT COUNT(*) FROM onergeler WHERE kullanici_id=?",(kid,)).fetchone()[0]
+        c2.close()
         st.markdown(f"""<div class="profil-card">
           <div style="font-size:3rem;text-align:center">👤</div>
           <div style="text-align:center;font-size:1.3rem;font-weight:800;color:#e2e8f0">
@@ -638,10 +667,10 @@ elif st.session_state.sayfa == "profil":
         st.subheader("🎁 Ödül Kataloğu")
         st.caption("Yeterli puanın varsa ödülü talep et!")
 
-        c_talepler = db()
+        c3 = db()
         mevcut_talepler = [r["odul_ad"] for r in
-            c_talepler.execute("SELECT odul_ad FROM odul_talepleri WHERE kullanici_id=?", (kid,)).fetchall()]
-        c_talepler.close()
+            c3.execute("SELECT odul_ad FROM odul_talepleri WHERE kullanici_id=?",(kid,)).fetchall()]
+        c3.close()
 
         for o in ODULLER:
             acik = puan >= o["puan"]
@@ -659,7 +688,7 @@ elif st.session_state.sayfa == "profil":
                     st.caption("✅ Talep gönderildi — yönetici onaylayacak")
                 elif st.button(f"🎁 Talep Et: {o['ad']}", key=f"talep_{o['ad']}"):
                     odul_talep_ekle(kid, st.session_state.kullanici_ad, o["ad"])
-                    st.success(f"Talep gönderildi! Yönetici onaylayacak.")
+                    st.success("Talep gönderildi! Yönetici onaylayacak.")
                     st.rerun()
 
 # ============================================================
@@ -667,9 +696,9 @@ elif st.session_state.sayfa == "profil":
 # ============================================================
 elif st.session_state.sayfa == "topluluk":
     st.subheader("🗳️ Topluluk Önergeleri")
-    fc, sc, kc = st.columns([2,1,2])
-    with fc: filtre  = st.selectbox("Sırala", ["En Çok Oy","En Yeni","Meclise Gidenler"])
-    with sc: arama   = st.text_input("🔍 Ara", placeholder="Konu ara...")
+    fc,sc,kc = st.columns([2,1,2])
+    with fc: filtre = st.selectbox("Sırala",["En Çok Oy","En Yeni","Meclise Gidenler"])
+    with sc: arama  = st.text_input("🔍 Ara", placeholder="Konu ara...")
     with kc:
         kat_list = ["Tümü"] + list(KATEGORILER.keys())
         kat_f = st.selectbox("📂 Kategori", kat_list)
@@ -681,7 +710,7 @@ elif st.session_state.sayfa == "topluluk":
         st.info("Önerge bulunamadı. 🌱")
     else:
         for o in listele:
-            meclis = o["oy"] >= MECLIS_OY_ESIGI
+            meclis   = o["oy"] >= MECLIS_OY_ESIGI
             kat_html = f'<span class="kat-etiket">{o["kategori"]} › {o["alt_kategori"]}</span>' if o.get("kategori") else ""
             st.markdown(f"""<div class="onerge-kart">
               <div style="display:flex;justify-content:space-between;align-items:flex-start">
@@ -694,12 +723,11 @@ elif st.session_state.sayfa == "topluluk":
               <div style="color:#94a3b8;font-size:0.82rem;margin-top:4px">{o['gerekce'][:120]}...</div>
             </div>""", unsafe_allow_html=True)
 
-            oc, dc = st.columns([2,2])
+            oc,dc = st.columns([2,2])
             with oc:
                 if st.button(f"👍 Destekle ({o['oy']} oy)", key=f"oy_{o['id']}"):
                     if kid:
-                        basarili = oy_ver(o["id"], kid)
-                        if basarili:
+                        if oy_ver(o["id"], kid):
                             puan_guncelle(kid, 10, "Önerge oylama")
                             rozet_kontrol_ve_guncelle(kid)
                             st.rerun()
@@ -730,10 +758,10 @@ elif st.session_state.sayfa == "admin":
     stats = istatistik_getir()
     a1,a2,a3,a4 = st.columns(4)
     for col,sayi,etiket in [
-        (a1, stats["toplam"],       "📋 Toplam Önerge"),
-        (a2, stats["bekleyen"],     "⏳ Bekleyen"),
-        (a3, stats["meclis"],       "🏛️ Meclise Giden"),
-        (a4, len(odul_talepleri_getir()), "🎁 Ödül Talebi"),
+        (a1, stats["toplam"],            "📋 Toplam Önerge"),
+        (a2, stats["bekleyen"],          "⏳ Bekleyen"),
+        (a3, stats["meclis"],            "🏛️ Meclise Giden"),
+        (a4, len(odul_talepleri_getir()),"🎁 Ödül Talebi"),
     ]:
         col.markdown(f"""<div class="stat-kart">
           <div class="stat-sayi">{sayi}</div>
@@ -743,25 +771,34 @@ elif st.session_state.sayfa == "admin":
     at1,at2,at3,at4 = st.tabs(["📋 Önerge Yönetimi","🎁 Ödül Talepleri","⭐ Puan Dağıt","📊 İstatistikler"])
 
     with at1:
-        onergeler = onergeler_getir("yeni")
-        if not onergeler:
+        onergeler_list = onergeler_getir("yeni")
+        if not onergeler_list:
             st.info("Henüz önerge yok.")
         else:
-            for o in onergeler:
-                renk = {"beklemede":"#fbbf24","onaylandi":"#34d399","reddedildi":"#f87171"}.get(o["durum"],"#94a3b8")
+            for o in onergeler_list:
+                renk     = {"beklemede":"#fbbf24","onaylandi":"#34d399","reddedildi":"#f87171"}.get(o["durum"],"#94a3b8")
                 kat_html = f'<span class="kat-etiket">{o["kategori"]}</span>' if o.get("kategori") else ""
-                st.markdown(f"""<div class="admin-kart">
-                  <div style="display:flex;justify-content:space-between">
-                    <b>#{o['id']} {o['baslik']}</b>
+                meclis_yazisi = "· 🏛️ MECLİSE GİDECEK" if o["oy"]>=MECLIS_OY_ESIGI else ""
+
+                st.markdown(f"""<div class="admin-onerge">
+                  <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+                    <b>#{o['id']} — Gelen Fikir</b>
                     <span style="color:{renk};font-size:0.82rem;font-weight:700">{o['durum'].upper()}</span>
                   </div>
-                  <div style="margin:4px 0">{kat_html}</div>
-                  <div style="color:#94a3b8;font-size:0.8rem">
-                    👤 {o['yazar']} · 🕒 {o['tarih']} · 👍 {o['oy']} oy
-                    {"· 🏛️ MECLİSE GİDECEK" if o['oy']>=MECLIS_OY_ESIGI else ""}
+                  <div style="margin-bottom:6px">{kat_html}</div>
+                  <div style="color:#94a3b8;font-size:0.8rem;margin-bottom:8px">
+                    👤 {o['yazar']} · 🕒 {o['tarih']} · 👍 {o['oy']} oy {meclis_yazisi}
                   </div>
-                  <div style="color:#cbd5e1;font-size:0.85rem;margin-top:4px">"{o['ham'][:100]}..."</div>
+                  <div style="background:#0f172a;border-radius:8px;padding:10px;margin-bottom:10px;
+                    color:#94a3b8;font-size:0.85rem;border-left:3px solid #475569;">
+                    💬 Kullanıcının yazdığı: <i>"{o['ham'][:150]}..."</i>
+                  </div>
                 </div>""", unsafe_allow_html=True)
+
+                # Resmi metni düzgün göster
+                st.markdown("**📄 Yapay Zekanın Oluşturduğu Resmi Önerge:**")
+                resmi_metin_goster(o)
+
                 c1,c2,c3 = st.columns([1,1,2])
                 with c1:
                     if st.button("✅ Onayla", key=f"onayla_{o['id']}"):
@@ -786,13 +823,12 @@ elif st.session_state.sayfa == "admin":
         else:
             for t in talepler:
                 renk = "#34d399" if t["durum"]=="teslim edildi" else "#fbbf24"
-                st.markdown(f"""<div class="admin-kart">
+                st.markdown(f"""<div class="admin-onerge">
                   <div style="display:flex;justify-content:space-between">
                     <span>🎁 <b>{t['odul_ad']}</b></span>
                     <span style="color:{renk};font-size:0.82rem">{t['durum'].upper()}</span>
                   </div>
-                  <div style="color:#94a3b8;font-size:0.8rem">
-                    👤 {t['kullanici_ad']} · 🕒 {t['tarih']}</div>
+                  <div style="color:#94a3b8;font-size:0.8rem">👤 {t['kullanici_ad']} · 🕒 {t['tarih']}</div>
                 </div>""", unsafe_allow_html=True)
                 if t["durum"] != "teslim edildi":
                     if st.button(f"✅ Teslim Et #{t['id']}", key=f"talep_{t['id']}"):
@@ -806,10 +842,11 @@ elif st.session_state.sayfa == "admin":
         if not kullanicilar:
             st.info("Henüz kayıtlı kullanıcı yok.")
         else:
-            secili_kul = st.selectbox("Kullanıcı Seç", [f"{k['ad']} (ID:{k['id']}, {k['puan']} puan)" for k in kullanicilar])
-            secili_id  = kullanicilar[[f"{k['ad']} (ID:{k['id']}, {k['puan']} puan)" for k in kullanicilar].index(secili_kul)]["id"]
-            ek_puan = st.number_input("Eklenecek Puan", min_value=0, max_value=5000, step=10, value=50)
-            sebep   = st.selectbox("Sebebi", [e["etkinlik"] for e in ETKINLIK_PUANLARI])
+            sec_list   = [f"{k['ad']} (ID:{k['id']}, {k['puan']} puan)" for k in kullanicilar]
+            secili_kul = st.selectbox("Kullanıcı Seç", sec_list)
+            secili_id  = kullanicilar[sec_list.index(secili_kul)]["id"]
+            ek_puan    = st.number_input("Eklenecek Puan", min_value=0, max_value=5000, step=10, value=50)
+            sebep      = st.selectbox("Sebebi", [e["etkinlik"] for e in ETKINLIK_PUANLARI])
             if st.button("⭐ Puan Ekle", type="primary"):
                 puan_guncelle(secili_id, ek_puan, sebep)
                 rozet_kontrol_ve_guncelle(secili_id)
